@@ -55,21 +55,33 @@ def build_prompt(state: State) -> str:
     return f"""
 You are an Investigator Agent.
 
-Your job is to analyze the situation and determine the most plausible cause(s) of the anomaly.
-
-You are given ONLY:
-- alert data
+Your job is to analyze the anomaly and infer the most plausible explanation using ONLY the alert data.
 
 You do NOT have access to event logs, process statistics, or historical data.
 
-Use only the provided information.
-Do NOT assume causes that are not supported by evidence.
-It is completely acceptable to say the cause is uncertain or unknown.
+However, you are given background knowledge about the process.
 
-Focus on:
-- identifying what can be inferred from the alert
-- distinguishing between direct cause and contributing factors
-- clearly stating uncertainty where data is insufficient
+=========================
+PROCESS BACKGROUND
+=========================
+This dataset represents a travel expense declaration process (BPI Challenge 2020).
+
+Typical process flow:
+- An employee submits a declaration for reimbursement
+- The declaration is reviewed by a supervisor and/or administration
+- The declaration may be:
+  - approved → moves forward
+  - rejected → sent back to employee for correction
+  - resubmitted → re-enters review
+
+Important process behaviors:
+- A rejection usually indicates missing, incorrect, or non-compliant information
+- Multiple rejection–resubmission cycles indicate rework or process inefficiency
+- A "LateAnomaly" means an activity occurred later than expected in the process timeline
+- Resource workload may affect speed, but does NOT explain why a rejection occurs
+- A rejection may be either:
+  - the cause of delay (due to rework), OR
+  - the result of delay (e.g., deadline violation)
 
 =========================
 ALERT
@@ -79,19 +91,23 @@ ALERT
 =========================
 GUIDELINES
 =========================
-1. Use only the alert data.
-2. Do NOT assume hidden context or external data.
-3. Distinguish between:
-   - direct cause (if identifiable)
-   - contributing factors
-   - uncertainty
+1. Use ONLY the alert data for reasoning.
+2. You may use the process background to interpret what the alert means.
+3. Do NOT assume hidden data or external context.
+4. Distinguish clearly between:
+   - what is observed
+   - what is inferred
+   - what is unknown
 
-4. Do NOT force a conclusion if the data is insufficient.
-5. Prefer cautious, evidence-based reasoning over confident guesses.
+5. You may infer a plausible cause IF the alert strongly suggests it.
+6. Otherwise, return "unknown" and explain why.
+
+7. Avoid overconfidence. Prefer cautious reasoning.
 
 IMPORTANT:
-- You do NOT have visibility into full process history or event durations
-- The deviating activity is only an observation, not proof of causality
+- The deviating activity is an observation, not proof of causality
+- A rejection event suggests possible rework, but does not guarantee it caused the delay
+- Resource availability does NOT explain why a declaration was rejected
 
 =========================
 OUTPUT FORMAT
@@ -99,7 +115,7 @@ OUTPUT FORMAT
 Return ONLY JSON:
 
 {{
-  "what_happened": "Short paragraph explaining what can be inferred from the alert.",
+  "what_happened": "Short paragraph explaining what likely happened in this case.",
   "root_cause_explanation": "...",
   "direct_cause": "... or unknown",
   "contributing_factors": ["...", "..."],
