@@ -44,6 +44,9 @@ class State:
     # ===== Input =====
     alert: AlertPayload
 
+    # ===== Raw Evidence =====
+    raw_event_rows: Optional[list[dict[str, Any]]] = None
+
     # ===== Precomputed Signals =====
     event_durations: Optional[dict[str, Any]] = None
     process_context: Optional[dict[str, Any]] = None

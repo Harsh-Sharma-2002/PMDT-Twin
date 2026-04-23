@@ -12,7 +12,27 @@ from functions import (
 )
 from investigator import run_investigator
 from llm import query_llm
+import pandas as pd
 
+def build_raw_event_rows(case_df):
+    case_df = case_df.sort_values("time:timestamp").reset_index(drop=True)
+
+    rows = []
+
+    for _, row in case_df.iterrows():
+        clean_row = {}
+
+        for k, v in row.to_dict().items():
+            if pd.isna(v):
+                clean_row[k] = None
+            elif isinstance(v, pd.Timestamp):
+                clean_row[k] = v.isoformat()  
+            else:
+                clean_row[k] = v
+
+        rows.append(clean_row)
+
+    return rows
 
 def main():
     zip_path = "BPI Challenge 2020_ Domestic Declarations_1_all.zip"
@@ -48,6 +68,9 @@ def main():
     state.event_durations = event_durations
     state.process_context = get_process_context(df, alert.timestamp)
     state.affected_cases = get_affected_cases(df, alert.resource_id, alert.anomaly_type)
+
+    # Raw XES event logs
+    state.raw_event_rows = build_raw_event_rows(case_df)
 
     # Track precomputed function calls
     state.add_trace(

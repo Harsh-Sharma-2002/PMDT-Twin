@@ -28,38 +28,22 @@ def _to_list(value: Any) -> list:
     return [value]
 
 
+
 def build_prompt(state: State) -> str:
-    event_durations = state.event_durations or {}
-    process_context = state.process_context or {}
-    affected_cases = state.affected_cases or {}
-
-    deviation_timestamp = event_durations.get("deviation_timestamp", state.alert.timestamp)
-    deviating_activity = event_durations.get("deviating_activity", state.alert.deviating_activity)
-    remaining_activities = event_durations.get("remaining_activities", [])
-
-    total_duration = float(event_durations.get("total_duration_hrs", 0.0))
-    normal_expected = float(event_durations.get("normal_expected_duration_hrs", 0.0))
-    estimated_delay = max(0.0, total_duration - normal_expected)
-
-    alert_block = {
-        "case_id": state.alert.case_id,
-        "anomaly_type": state.alert.anomaly_type,
-        "timestamp": state.alert.timestamp,
-        "deviating_activity": state.alert.deviating_activity,
-        "resource_id": state.alert.resource_id,
-        "current_workload": state.alert.current_workload,
-        "is_available": state.alert.is_available,
-        "shift_end_in_hrs": state.alert.shift_end_in_hrs,
-    }
+    raw_events = state.raw_event_rows or []
 
     return f"""
 You are an Investigator Agent.
 
-Your job is to analyze the anomaly and infer the most plausible explanation using ONLY the alert data.
+Your job is to analyze the process execution and infer the most plausible explanation using ONLY the raw event log.
 
-You do NOT have access to event logs, process statistics, or historical data.
+You do NOT have access to:
+- alert data
+- aggregated statistics
+- historical data
+- external context
 
-However, you are given background knowledge about the process.
+Do NOT invent missing data.
 
 =========================
 PROCESS BACKGROUND
@@ -77,37 +61,36 @@ Typical process flow:
 Important process behaviors:
 - A rejection usually indicates missing, incorrect, or non-compliant information
 - Multiple rejection–resubmission cycles indicate rework or process inefficiency
-- A "LateAnomaly" means an activity occurred later than expected in the process timeline
-- Resource workload may affect speed, but does NOT explain why a rejection occurs
-- A rejection may be either:
-  - the cause of delay (due to rework), OR
-  - the result of delay (e.g., deadline violation)
+- Long gaps between events indicate waiting or delays
+- Multiple resource handoffs indicate coordination overhead
 
 =========================
-ALERT
+RAW EVENT LOG (PRIMARY EVIDENCE)
 =========================
-{_pretty(alert_block)}
+{_pretty(raw_events)}
 
 =========================
 GUIDELINES
 =========================
-1. Use ONLY the alert data for reasoning.
-2. You may use the process background to interpret what the alert means.
+1. Use ONLY the raw event log for reasoning.
+2. Identify patterns such as:
+   - repeated rejection and resubmission (rework)
+   - long time gaps (delays)
+   - loops or repeated activities
+   - unusual ordering of activities
 3. Do NOT assume hidden data or external context.
 4. Distinguish clearly between:
    - what is observed
    - what is inferred
    - what is unknown
 
-5. You may infer a plausible cause IF the alert strongly suggests it.
-6. Otherwise, return "unknown" and explain why.
-
-7. Avoid overconfidence. Prefer cautious reasoning.
+5. If strong evidence exists, infer a plausible cause.
+6. Otherwise, return "unknown".
+7. Avoid overconfidence.
 
 IMPORTANT:
-- The deviating activity is an observation, not proof of causality
-- A rejection event suggests possible rework, but does not guarantee it caused the delay
-- Resource availability does NOT explain why a declaration was rejected
+- Activities are observations, not proof of causality
+- Patterns must be supported by the event sequence
 
 =========================
 OUTPUT FORMAT
@@ -123,6 +106,109 @@ Return ONLY JSON:
   "evidence_chain": ["...", "..."]
 }}
 """.strip()
+
+
+########################################################################################
+
+
+# def build_prompt(state: State) -> str:
+#     event_durations = state.event_durations or {}
+#     process_context = state.process_context or {}
+#     affected_cases = state.affected_cases or {}
+
+#     deviation_timestamp = event_durations.get("deviation_timestamp", state.alert.timestamp)
+#     deviating_activity = event_durations.get("deviating_activity", state.alert.deviating_activity)
+#     remaining_activities = event_durations.get("remaining_activities", [])
+
+#     total_duration = float(event_durations.get("total_duration_hrs", 0.0))
+#     normal_expected = float(event_durations.get("normal_expected_duration_hrs", 0.0))
+#     estimated_delay = max(0.0, total_duration - normal_expected)
+
+#     alert_block = {
+#         "case_id": state.alert.case_id,
+#         "anomaly_type": state.alert.anomaly_type,
+#         "timestamp": state.alert.timestamp,
+#         "deviating_activity": state.alert.deviating_activity,
+#         "resource_id": state.alert.resource_id,
+#         "current_workload": state.alert.current_workload,
+#         "is_available": state.alert.is_available,
+#         "shift_end_in_hrs": state.alert.shift_end_in_hrs,
+#     }
+
+#     return f"""
+# You are an Investigator Agent.
+
+# Your job is to analyze the anomaly and infer the most plausible explanation using ONLY the alert data.
+
+# You do NOT have access to event logs, process statistics, or historical data.
+
+# However, you are given background knowledge about the process.
+
+# =========================
+# PROCESS BACKGROUND
+# =========================
+# This dataset represents a travel expense declaration process (BPI Challenge 2020).
+
+# Typical process flow:
+# - An employee submits a declaration for reimbursement
+# - The declaration is reviewed by a supervisor and/or administration
+# - The declaration may be:
+#   - approved → moves forward
+#   - rejected → sent back to employee for correction
+#   - resubmitted → re-enters review
+
+# Important process behaviors:
+# - A rejection usually indicates missing, incorrect, or non-compliant information
+# - Multiple rejection–resubmission cycles indicate rework or process inefficiency
+# - A "LateAnomaly" means an activity occurred later than expected in the process timeline
+# - Resource workload may affect speed, but does NOT explain why a rejection occurs
+# - A rejection may be either:
+#   - the cause of delay (due to rework), OR
+#   - the result of delay (e.g., deadline violation)
+
+# =========================
+# ALERT
+# =========================
+# {_pretty(alert_block)}
+
+# =========================
+# GUIDELINES
+# =========================
+# 1. Use ONLY the alert data for reasoning.
+# 2. You may use the process background to interpret what the alert means.
+# 3. Do NOT assume hidden data or external context.
+# 4. Distinguish clearly between:
+#    - what is observed
+#    - what is inferred
+#    - what is unknown
+
+# 5. You may infer a plausible cause IF the alert strongly suggests it.
+# 6. Otherwise, return "unknown" and explain why.
+
+# 7. Avoid overconfidence. Prefer cautious reasoning.
+
+# IMPORTANT:
+# - The deviating activity is an observation, not proof of causality
+# - A rejection event suggests possible rework, but does not guarantee it caused the delay
+# - Resource availability does NOT explain why a declaration was rejected
+
+# =========================
+# OUTPUT FORMAT
+# =========================
+# Return ONLY JSON:
+
+# {{
+#   "what_happened": "Short paragraph explaining what likely happened in this case.",
+#   "root_cause_explanation": "...",
+#   "direct_cause": "... or unknown",
+#   "contributing_factors": ["...", "..."],
+#   "confidence": 0.0,
+#   "evidence_chain": ["...", "..."]
+# }}
+# """.strip()
+
+########################################################################################
+
 # def build_prompt(state: State) -> str:
 #     event_durations = state.event_durations or {}
 #     process_context = state.process_context or {}
