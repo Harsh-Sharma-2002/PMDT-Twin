@@ -2,8 +2,9 @@ from data_loader import (
     load_first_xes_from_zip,
     get_longest_case,
     extract_case_features,
-    build_alert_from_case,
+    build_raw_logs,
 )
+from payload_builder import build_alert_payload
 from state import State
 from functions import (
     get_event_durations,
@@ -14,12 +15,12 @@ from investigator import run_investigator
 from llm import query_llm
 
 
-def main():
-    zip_path = "BPI Challenge 2020_ Domestic Declarations_1_all.zip"
+ZIP_PATH = "BPI Challenge 2020_ Domestic Declarations_1_all.zip"
 
-    print(f"Loading dataset from: {zip_path}")
-    df = load_first_xes_from_zip(zip_path)
 
+def main() -> None:
+    print(f"Loading dataset from: {ZIP_PATH}")
+    df = load_first_xes_from_zip(ZIP_PATH)
     print("Columns:", list(df.columns))
 
     case_id, case_df = get_longest_case(df)
@@ -29,27 +30,25 @@ def main():
     features = extract_case_features(case_df)
     print("\nCase features:", features)
 
-    # Precompute anomaly evidence first so the alert can use the deviation timestamp
+    # Precompute evidence before building the alert.
     event_durations = get_event_durations(case_df, df)
     print("\nEvent durations:", event_durations)
 
-    alert = build_alert_from_case(
+    alert = build_alert_payload(
         case_id=case_id,
         case_df=case_df,
         features=features,
         full_df=df,
         event_durations=event_durations,
     )
-    print("\nAlert:", alert)
+    print("Alert:", alert)
 
     state = State(alert=alert)
-
-    # Store precomputed evidence in state
     state.event_durations = event_durations
+    state.raw_logs = build_raw_logs(case_df)
     state.process_context = get_process_context(df, alert.timestamp)
     state.affected_cases = get_affected_cases(df, alert.resource_id, alert.anomaly_type)
 
-    # Track precomputed function calls
     state.add_trace(
         "get_event_durations",
         {"case_id": alert.case_id},
@@ -69,7 +68,6 @@ def main():
         state.affected_cases,
     )
 
-    # Run investigator once with all context
     state = run_investigator(state, query_llm)
 
     print("\n============================")
@@ -87,13 +85,10 @@ def main():
         return
 
     output = state.investigator_output
-    if not output:
+    if output is None:
         print("No output generated")
         return
 
-    what_happened = getattr(output, "what_happened", None)
-
-    print("What Happened:", what_happened if what_happened else "N/A")
     print("Root Cause:", output.root_cause)
     print("Causal Factor:", output.causal_factor)
     print("Bottleneck Resource:", output.bottleneck_resource)

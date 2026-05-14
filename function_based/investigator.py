@@ -20,7 +20,7 @@ def _pretty(value: Any) -> str:
         return str(value)
 
 
-def _to_list(value: Any) -> list:
+def _to_list(value: Any) -> list[Any]:
     if isinstance(value, list):
         return value
     if value is None:
@@ -28,23 +28,35 @@ def _to_list(value: Any) -> list:
     return [value]
 
 
+def _to_str_list(value: Any) -> list[str]:
+    return [str(x) for x in _to_list(value)]
+
+
 def build_prompt(state: State) -> str:
     event_durations = state.event_durations or {}
     process_context = state.process_context or {}
     affected_cases = state.affected_cases or {}
 
-    deviation_timestamp = event_durations.get("deviation_timestamp", state.alert.timestamp)
-    deviating_activity = event_durations.get("deviating_activity", state.alert.deviating_activity)
+    deviation_timestamp = (
+        state.deviation_timestamp
+        or event_durations.get("deviation_timestamp")
+        or state.alert.timestamp
+    )
+    deviating_activity = event_durations.get(
+        "deviating_activity",
+        state.alert.deviating_activity,
+    )
     remaining_activities = event_durations.get("remaining_activities", [])
 
     total_duration = float(event_durations.get("total_duration_hrs", 0.0))
-    normal_expected = float(event_durations.get("normal_expected_duration_hrs", 0.0))
+    normal_expected = float(event_durations.get("normal_total_duration_hrs", 0.0))
     estimated_delay = max(0.0, total_duration - normal_expected)
 
     alert_block = {
         "case_id": state.alert.case_id,
         "anomaly_type": state.alert.anomaly_type,
         "timestamp": state.alert.timestamp,
+        "token_replay_fitness": state.alert.token_replay_fitness,
         "deviating_activity": state.alert.deviating_activity,
         "resource_id": state.alert.resource_id,
         "current_workload": state.alert.current_workload,
@@ -53,35 +65,23 @@ def build_prompt(state: State) -> str:
     }
 
     return f"""
-You are an Investigator Agent.
+You are an Investigator Agent for process-mining anomaly analysis.
 
-Your job is to analyze the anomaly and infer the most plausible explanation using ONLY the alert data.
+Your job is to explain why this anomaly likely happened using only the provided evidence.
+Do not guess. Do not force a cause if the evidence is weak.
+If the evidence is mixed or insufficient, use "unknown".
 
-You do NOT have access to event logs, process statistics, or historical data.
+You are given:
+- an AlertPayload
+- event duration evidence
+- process context evidence
+- affected-case evidence
 
-However, you are given background knowledge about the process.
-
-=========================
-PROCESS BACKGROUND
-=========================
-This dataset represents a travel expense declaration process (BPI Challenge 2020).
-
-Typical process flow:
-- An employee submits a declaration for reimbursement
-- The declaration is reviewed by a supervisor and/or administration
-- The declaration may be:
-  - approved → moves forward
-  - rejected → sent back to employee for correction
-  - resubmitted → re-enters review
-
-Important process behaviors:
-- A rejection usually indicates missing, incorrect, or non-compliant information
-- Multiple rejection–resubmission cycles indicate rework or process inefficiency
-- A "LateAnomaly" means an activity occurred later than expected in the process timeline
-- Resource workload may affect speed, but does NOT explain why a rejection occurs
-- A rejection may be either:
-  - the cause of delay (due to rework), OR
-  - the result of delay (e.g., deadline violation)
+Use at least two independent numeric signals when possible.
+Prefer evidence from the log over speculation.
+If the cause is resource-related, use resource utilization and overdue cases.
+If the cause is data-related, use attribute errors and related context.
+If the cause is deadline-related, use near-deadline pressure and queue delay.
 
 =========================
 ALERT
@@ -89,256 +89,68 @@ ALERT
 {_pretty(alert_block)}
 
 =========================
+EVENT DURATIONS
+=========================
+{_pretty(event_durations)}
+
+=========================
+PROCESS CONTEXT
+=========================
+{_pretty(process_context)}
+
+=========================
+AFFECTED CASES
+=========================
+{_pretty(affected_cases)}
+
+=========================
+DERIVED CHECKS
+=========================
+Deviation Timestamp: {deviation_timestamp}
+Deviating Activity: {deviating_activity}
+Remaining Activities: {_pretty(remaining_activities)}
+Estimated Delay (hrs): {estimated_delay}
+
+=========================
 GUIDELINES
 =========================
-1. Use ONLY the alert data for reasoning.
-2. You may use the process background to interpret what the alert means.
-3. Do NOT assume hidden data or external context.
-4. Distinguish clearly between:
-   - what is observed
-   - what is inferred
-   - what is unknown
+1. Use numerical evidence wherever possible.
+2. Build an evidence chain with explicit numbers.
+3. Distinguish:
+   - direct cause
+   - contributing factors
+   - uncertainty
+4. Do not return a confident cause if the evidence is weak.
+5. If the evidence does not support a clear cause, use:
+   - root_cause = "unknown"
+   - causal_factor = "unknown"
 
-5. You may infer a plausible cause IF the alert strongly suggests it.
-6. Otherwise, return "unknown" and explain why.
-
-7. Avoid overconfidence. Prefer cautious reasoning.
-
-IMPORTANT:
-- The deviating activity is an observation, not proof of causality
-- A rejection event suggests possible rework, but does not guarantee it caused the delay
-- Resource availability does NOT explain why a declaration was rejected
+Allowed causal_factor values:
+- resource_bottleneck
+- data_error
+- deadline_pressure
+- policy_violation
+- unknown
 
 =========================
 OUTPUT FORMAT
 =========================
-Return ONLY JSON:
+Return ONLY JSON with these fields:
 
 {{
-  "what_happened": "Short paragraph explaining what likely happened in this case.",
-  "root_cause_explanation": "...",
-  "direct_cause": "... or unknown",
-  "contributing_factors": ["...", "..."],
-  "confidence": 0.0,
-  "evidence_chain": ["...", "..."]
+  "root_cause": "short causal label or unknown",
+  "causal_factor": "resource_bottleneck | data_error | deadline_pressure | policy_violation | unknown",
+  "bottleneck_resource": "resource id or null",
+  "trigger_ids": ["signal_1", "signal_2"],
+  "trigger_confidence": {{"signal_1": 0.0, "signal_2": 0.0}},
+  "evidence_chain": [
+    "step 1 with numbers",
+    "step 2 with numbers"
+  ],
+  "impacted_cases": ["case_1", "case_2"],
+  "estimated_delay_hrs": 0.0
 }}
 """.strip()
-# def build_prompt(state: State) -> str:
-#     event_durations = state.event_durations or {}
-#     process_context = state.process_context or {}
-#     affected_cases = state.affected_cases or {}
-
-#     deviation_timestamp = event_durations.get("deviation_timestamp", state.alert.timestamp)
-#     deviating_activity = event_durations.get("deviating_activity", state.alert.deviating_activity)
-#     remaining_activities = event_durations.get("remaining_activities", [])
-
-#     total_duration = float(event_durations.get("total_duration_hrs", 0.0))
-#     normal_expected = float(event_durations.get("normal_expected_duration_hrs", 0.0))
-#     estimated_delay = max(0.0, total_duration - normal_expected)
-
-#     alert_block = {
-#         "case_id": state.alert.case_id,
-#         "anomaly_type": state.alert.anomaly_type,
-#         "timestamp": state.alert.timestamp,
-#         "deviating_activity": state.alert.deviating_activity,
-#         "resource_id": state.alert.resource_id,
-#         "current_workload": state.alert.current_workload,
-#         "is_available": state.alert.is_available,
-#         "shift_end_in_hrs": state.alert.shift_end_in_hrs,
-#     }
-
-#     return f"""
-# You are an Investigator Agent.
-
-# Your job is to analyze the situation and determine the most plausible cause(s) of the anomaly.
-
-# You are given:
-# - alert data
-# - event duration analysis
-# - process context
-# - affected cases
-
-# Use all provided data carefully.
-
-# Do NOT assume causes that are not supported by evidence.
-# It is completely acceptable to say the cause is uncertain or unknown.
-
-# Focus on:
-# - identifying what likely caused the delay
-# - distinguishing between direct cause and contributing factors
-# - explaining your reasoning using the available signals
-
-# =========================
-# ALERT
-# =========================
-# {_pretty(alert_block)}
-
-# =========================
-# EVENT DURATIONS
-# =========================
-# {_pretty(event_durations)}
-
-# =========================
-# PROCESS CONTEXT
-# =========================
-# {_pretty(process_context)}
-
-# =========================
-# AFFECTED CASES
-# =========================
-# {_pretty(affected_cases)}
-
-# =========================
-# DERIVED CHECKS
-# =========================
-# Deviation Timestamp: {deviation_timestamp}
-# Deviating Activity: {deviating_activity}
-# Remaining Activities: {_pretty(remaining_activities)}
-# Estimated Delay (hrs): {estimated_delay}
-
-# =========================
-# GUIDELINES
-# =========================
-# 1. Use numerical evidence wherever possible.
-# 2. Use at least TWO independent signals when available.
-# 3. Distinguish between:
-#    - direct cause (if identifiable)
-#    - contributing factors
-#    - uncertainty
-
-# 4. Do NOT force a conclusion if the data does not clearly support one.
-# 5. Prefer cautious, evidence-based reasoning over confident guesses.
-
-# IMPORTANT:
-# - estimated_delay_hrs = total_duration_hrs - normal_expected_duration_hrs
-# - Do NOT write expressions like 120 - 48
-# - The deviating activity and timestamp are useful anchors, but do NOT prove causality by themselves
-
-# =========================
-# OUTPUT FORMAT
-# =========================
-# Return ONLY JSON:
-
-# {{
-#   "what_happened": "Short paragraph (3–5 sentences) explaining what likely happened in this case in plain language.",
-#   "root_cause_explanation": "...",
-#   "direct_cause": "... or unknown",
-#   "contributing_factors": ["...", "..."],
-#   "confidence": 0.0,
-#   "evidence_chain": ["...", "..."],
-#   "estimated_delay_hrs": 0.0
-# }}
-# """.strip()
-
-######################################################################
-
-
-# def build_prompt(state: State) -> str:
-#     event_durations = state.event_durations or {}
-#     process_context = state.process_context or {}
-#     affected_cases = state.affected_cases or {}
-
-#     deviation_timestamp = event_durations.get("deviation_timestamp", state.alert.timestamp)
-#     deviating_activity = event_durations.get("deviating_activity", state.alert.deviating_activity)
-#     remaining_activities = event_durations.get("remaining_activities", [])
-
-#     total_duration = float(event_durations.get("total_duration_hrs", 0.0))
-#     normal_expected = float(event_durations.get("normal_expected_duration_hrs", 0.0))
-#     estimated_delay = max(0.0, total_duration - normal_expected)
-
-#     alert_block = {
-#         "case_id": state.alert.case_id,
-#         "anomaly_type": state.alert.anomaly_type,
-#         "timestamp": state.alert.timestamp,
-#         "deviating_activity": state.alert.deviating_activity,
-#         "resource_id": state.alert.resource_id,
-#         "current_workload": state.alert.current_workload,
-#         "is_available": state.alert.is_available,
-#         "shift_end_in_hrs": state.alert.shift_end_in_hrs,
-#     }
-
-#     return f"""
-# You are an Investigator Agent.
-
-# Your job is to determine the ROOT CAUSE of an anomaly using structured evidence.
-
-# You are given:
-# - alert data
-# - event duration analysis
-# - process context
-# - affected cases
-
-# Use all provided data.
-# Prefer numerical evidence over vague reasoning.
-# Do not invent facts that are not in the data.
-
-# =========================
-# ALERT
-# =========================
-# {_pretty(alert_block)}
-
-# =========================
-# EVENT DURATIONS
-# =========================
-# {_pretty(event_durations)}
-
-# =========================
-# PROCESS CONTEXT
-# =========================
-# {_pretty(process_context)}
-
-# =========================
-# AFFECTED CASES
-# =========================
-# {_pretty(affected_cases)}
-
-# =========================
-# DERIVED CHECKS
-# =========================
-# Deviation Timestamp: {deviation_timestamp}
-# Deviating Activity: {deviating_activity}
-# Remaining Activities: {_pretty(remaining_activities)}
-# Estimated Delay (hrs): {estimated_delay}
-
-# =========================
-# RULES
-# =========================
-# 1. Use at least TWO independent signals.
-# 2. Use numerical evidence.
-# 3. Choose ONE causal_factor from:
-#    - resource_bottleneck
-#    - data_error
-#    - deadline_pressure
-#    - policy_violation
-#    - unknown
-
-# 4. estimated_delay_hrs must be a number.
-# 5. Return valid JSON only.
-# 6. Use JSON booleans and null only:
-#    - true / false / null
-#    Do NOT use Python booleans like True / False.
-
-# IMPORTANT:
-# - estimated_delay_hrs must be computed as total_duration_hrs - normal_expected_duration_hrs
-# - Do NOT write expressions like 120 - 48
-# - If causal_factor is resource_bottleneck, bottleneck_resource should usually be the alert resource_id unless the evidence clearly says otherwise
-# - Use the deviation timestamp and deviating activity from the event-duration analysis when they are present
-
-# =========================
-# OUTPUT FORMAT
-# =========================
-# Return ONLY JSON:
-
-# {{
-#   "root_cause": "...",
-#   "causal_factor": "...",
-#   "bottleneck_resource": "... or null",
-#   "trigger_ids": [...],
-#   "trigger_confidence": {{...}},
-#   "evidence_chain": ["...", "..."],
-#   "estimated_delay_hrs": 0.0
-# }}
-# """.strip()
 
 
 def run_investigator(state: State, query_fn) -> State:
@@ -351,41 +163,52 @@ def run_investigator(state: State, query_fn) -> State:
         print("\n[LLM OUTPUT]\n", response)
 
         parsed = parse_llm_output(response)
+        if not isinstance(parsed, dict):
+            raise ValueError("LLM output could not be parsed into a JSON object")
 
-        estimated_delay = 0.0
-        if isinstance(state.event_durations, dict):
-            estimated_delay = max(
-                0.0,
-                float(state.event_durations.get("total_duration_hrs", 0.0))
-                - float(state.event_durations.get("normal_expected_duration_hrs", 0.0)),
-            )
+        event_durations = state.event_durations or {}
+        estimated_delay = max(
+            0.0,
+            float(event_durations.get("total_duration_hrs", 0.0))
+            - float(event_durations.get("normal_total_duration_hrs", 0.0)),
+        )
 
-        causal_factor = str(parsed.get("causal_factor", "unknown"))
+        root_cause = str(parsed.get("root_cause", "unknown")).strip() or "unknown"
+        causal_factor = str(parsed.get("causal_factor", "unknown")).strip() or "unknown"
+
         bottleneck_resource = parsed.get("bottleneck_resource")
-        trigger_confidence = parsed.get("trigger_confidence", {})
+        if bottleneck_resource is not None:
+            bottleneck_resource = str(bottleneck_resource).strip() or None
 
         if causal_factor == "resource_bottleneck" and not bottleneck_resource:
             bottleneck_resource = state.alert.resource_id
 
-        if trigger_confidence is None or not isinstance(trigger_confidence, dict):
+        trigger_ids = _to_str_list(parsed.get("trigger_ids", []))
+        evidence_chain = _to_str_list(parsed.get("evidence_chain", []))
+
+        trigger_confidence = parsed.get("trigger_confidence", {})
+        if not isinstance(trigger_confidence, dict):
             trigger_confidence = {}
 
-        impacted_cases = []
-        if isinstance(state.affected_cases, dict):
-            impacted_cases = _to_list(state.affected_cases.get("cases", []))
+        impacted_cases = _to_str_list(parsed.get("impacted_cases", []))
+        if not impacted_cases and isinstance(state.affected_cases, dict):
+            impacted_cases = _to_str_list(state.affected_cases.get("cases", []))
 
-        trigger_ids = _to_list(parsed.get("trigger_ids", []))
-        evidence_chain = _to_list(parsed.get("evidence_chain", []))
+        estimated_delay_hrs = parsed.get("estimated_delay_hrs", estimated_delay)
+        try:
+            estimated_delay_hrs = float(estimated_delay_hrs)
+        except Exception:
+            estimated_delay_hrs = float(estimated_delay)
 
         state.investigator_output = InvestigatorOutput(
-            root_cause=str(parsed.get("root_cause", "unknown")),
+            root_cause=root_cause,
             causal_factor=causal_factor,
             bottleneck_resource=bottleneck_resource,
-            trigger_ids=[str(x) for x in trigger_ids],
+            trigger_ids=trigger_ids,
             trigger_confidence=trigger_confidence,
-            evidence_chain=[str(x) for x in evidence_chain],
-            impacted_cases=[str(x) for x in impacted_cases],
-            estimated_delay_hrs=float(parsed.get("estimated_delay_hrs", estimated_delay)),
+            evidence_chain=evidence_chain,
+            impacted_cases=impacted_cases,
+            estimated_delay_hrs=estimated_delay_hrs,
         )
 
         return state
@@ -393,8 +216,3 @@ def run_investigator(state: State, query_fn) -> State:
     except Exception as e:
         state.mark_error("investigator", str(e))
         return state
-    
-
-
-
-    

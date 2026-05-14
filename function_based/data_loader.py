@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import tempfile
 import zipfile
 from collections import Counter
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import pandas as pd
 import pm4py
@@ -81,6 +83,31 @@ def _pick_alert_resource(case_df: pd.DataFrame) -> str:
         return Counter(filtered).most_common(1)[0][0]
 
     return Counter(resources).most_common(1)[0][0]
+
+
+def build_raw_logs(case_df: pd.DataFrame) -> list[dict[str, Any]]:
+    """
+    Convert a case dataframe into a clean raw-log list for the LLM prompt.
+    This is what you store in state.raw_logs.
+    """
+    if TIME_COL not in case_df.columns:
+        raise KeyError(f"Missing column: {TIME_COL}")
+
+    case_df = case_df.sort_values(TIME_COL).reset_index(drop=True)
+    rows: list[dict[str, Any]] = []
+
+    for _, row in case_df.iterrows():
+        clean_row: dict[str, Any] = {}
+        for k, v in row.to_dict().items():
+            if pd.isna(v):
+                clean_row[k] = None
+            elif isinstance(v, pd.Timestamp):
+                clean_row[k] = v.isoformat()
+            else:
+                clean_row[k] = v
+        rows.append(clean_row)
+
+    return rows
 
 
 def extract_case_features(case_df: pd.DataFrame) -> dict:
@@ -189,7 +216,6 @@ def build_alert_from_case(
     if timestamps.isna().all():
         raise ValueError("No valid timestamps found in case_df")
 
-    start_timestamp = str(timestamps.iloc[0])
     end_timestamp = str(timestamps.iloc[-1])
 
     deviating_activity = str(features.get("deviating_activity", case_df.iloc[-1][ACTIVITY_COL]))

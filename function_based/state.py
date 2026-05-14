@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+import pandas as pd
+
 
 # =========================
 # Alert Payload (Input)
@@ -12,7 +14,6 @@ class AlertPayload:
     case_id: str
     anomaly_type: str
     timestamp: str
-    deviation_timestamp: str
     token_replay_fitness: float
     deviating_activity: str
     resource_id: str
@@ -37,34 +38,51 @@ class InvestigatorOutput:
 
 
 # =========================
-# Workflow State (FUNCTION BASED)
+# Workflow State
 # =========================
 @dataclass
 class State:
-    # ===== Input =====
+    # -------------------------------------------------
+    # Input / benchmark setup
+    # -------------------------------------------------
     alert: AlertPayload
+    full_df: Optional[pd.DataFrame] = None
+    case_df: Optional[pd.DataFrame] = None
 
-    # ===== Precomputed Signals =====
+    # Precomputed lookup structures
+    anomaly_index: Optional[dict[str, list[str]]] = None
+    variant_index: Optional[dict[Any, Any]] = None
+
+    # -------------------------------------------------
+    # Derived alert context
+    # -------------------------------------------------
+    deviation_timestamp: Optional[str] = None
     event_durations: Optional[dict[str, Any]] = None
     process_context: Optional[dict[str, Any]] = None
     affected_cases: Optional[dict[str, Any]] = None
 
-    # ===== Prompt / Output =====
+    # -------------------------------------------------
+    # Prompt / outputs
+    # -------------------------------------------------
     prompt: Optional[str] = None
     final_answer: Optional[str] = None
     investigator_output: Optional[InvestigatorOutput] = None
 
-    # ===== Debug =====
+    # -------------------------------------------------
+    # Debug / trace
+    # -------------------------------------------------
     tool_call_trace: list[dict[str, Any]] = field(default_factory=list)
     tool_call_count: int = 0
 
-    # ===== Error Handling =====
+    # -------------------------------------------------
+    # Error handling
+    # -------------------------------------------------
     error: Optional[str] = None
     failed_node: Optional[str] = None
 
     def add_trace(self, tool_name: str, tool_input: Any, tool_output: Any) -> None:
         """
-        Record function execution.
+        Record a function/tool execution in the benchmark trace.
         """
         self.tool_call_trace.append(
             {
